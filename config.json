@@ -1,0 +1,15 @@
+{
+  "region": {
+    "top": 850,
+    "left": 900,
+    "width": 700,
+    "height": 250
+  },
+  "match_threshold": 0.82,
+  "check_interval": 0.15,
+  "key_cooldown": 0.4,
+  "templates": {
+    "space": { "file": "continue_icon.png", "key": "space" },
+    "f": { "file": "f_icon.png", "key": "f" }
+  }
+}

@@ -1,0 +1,45 @@
+name: Build and attach exe to release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows-exe:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build DialogueSkipper.exe
+        run: pyinstaller --onefile --console --name DialogueSkipper dialogue_skipper.py
+
+      - name: Build CaptureScreenshot.exe
+        run: pyinstaller --onefile --console --name CaptureScreenshot capture_templates.py
+
+      - name: Assemble release package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path release_package | Out-Null
+          Copy-Item dist/DialogueSkipper.exe release_package/
+          Copy-Item dist/CaptureScreenshot.exe release_package/
+          Copy-Item config.json release_package/
+          Copy-Item README.md release_package/
+          Copy-Item templates release_package/templates -Recurse
+          Compress-Archive -Path release_package/* -DestinationPath GenshinAutoSkip.zip
+
+      - name: Upload zip to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.event.release.tag_name }}" GenshinAutoSkip.zip --clobber
