@@ -12,6 +12,7 @@
 Запуск игры должен быть в фокусе. Останов: Ctrl+C или закрыть окно консоли.
 """
 
+import ctypes
 import json
 import os
 import sys
@@ -28,6 +29,14 @@ from rich.panel import Panel
 from rich.table import Table
 
 pydirectinput.PAUSE = 0  # не тормозить между вызовами pydirectinput
+
+try:
+    # Без этого при масштабировании экрана (125%/150%) и/или запуске от администратора
+    # координаты захвата экрана (mss) могут не совпадать с тем, что откалибровано по
+    # обычному скриншоту — Windows виртуализирует DPI по-разному в зависимости от контекста.
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
+except Exception:
+    pass
 
 LOG_MAX_LINES = 8
 
@@ -93,7 +102,7 @@ def find_best_match(frame_gray, templates):
     return best_name, best_key, best_score
 
 
-def render_dashboard(config, counters, last_event, log_lines):
+def render_dashboard(config, counters, last_event, log_lines, live_name, live_score):
     region = config["region"]
 
     stats = Table.grid(padding=(0, 2))
@@ -106,6 +115,10 @@ def render_dashboard(config, counters, last_event, log_lines):
         f"width={region['width']} height={region['height']}",
     )
     stats.add_row("Порог совпадения:", str(config["match_threshold"]))
+    stats.add_row(
+        "Текущий лучший score:",
+        f"{live_name or '-'}: {live_score:.2f}",
+    )
     stats.add_row("Нажатий SPACE:", str(counters.get("space", 0)))
     stats.add_row("Нажатий F:", str(counters.get("f", 0)))
     stats.add_row("Последнее действие:", last_event or "-")
@@ -140,7 +153,7 @@ def main():
     last_press_time = 0.0
 
     with mss.mss() as sct, Live(
-        render_dashboard(config, counters, last_event, log_lines),
+        render_dashboard(config, counters, last_event, log_lines, None, 0.0),
         console=console,
         refresh_per_second=8,
         screen=True,
@@ -157,8 +170,8 @@ def main():
                     counters[name] = counters.get(name, 0) + 1
                     last_event = f"{name} (score={score:.2f}) -> press {key}"
                     log_lines.appendleft(f"[{time.strftime('%H:%M:%S')}] {last_event}")
-                    live.update(render_dashboard(config, counters, last_event, log_lines))
 
+            live.update(render_dashboard(config, counters, last_event, log_lines, name, score))
             time.sleep(check_interval)
 
 

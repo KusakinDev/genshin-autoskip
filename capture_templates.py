@@ -18,11 +18,19 @@
 и впиши их в config.json в поле "region".
 """
 
+import ctypes
 import os
 import sys
 
 import mss
 import mss.tools
+
+try:
+    # Тот же вызов, что и в dialogue_skipper.py — координаты калибровочного
+    # скриншота должны сниматься в одинаковом режиме DPI с рабочим захватом.
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
+except Exception:
+    pass
 
 
 def base_dir():

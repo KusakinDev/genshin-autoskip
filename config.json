@@ -1,11 +1,11 @@
 {
   "region": {
-    "top": 850,
-    "left": 900,
-    "width": 700,
-    "height": 250
+    "top": 760,
+    "left": 880,
+    "width": 460,
+    "height": 340
   },
-  "match_threshold": 0.82,
+  "match_threshold": 0.75,
   "check_interval": 0.15,
   "key_cooldown": 0.4,
   "templates": {
