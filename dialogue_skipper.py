@@ -1,13 +1,20 @@
 """
 Автоскип диалогов в Genshin Impact.
 
-Каждые CHECK_INTERVAL секунд захватывает область экрана и ищет шаблоном
-две иконки-подсказки:
-    - continue_icon.png -> нажимает SPACE (пропуск реплики)
-    - f_icon.png         -> нажимает F (выбор варианта, без разницы какого)
+Логика в два уровня:
+    1. Gate: ищем широкую золотую полосу-разделитель под именем персонажа —
+       она есть всегда, пока на экране открыт диалог (и во время печати текста,
+       и во время выбора варианта). Это большой, специфичный по форме элемент,
+       случайно совпасть с чем-то посторонним ему практически нереально —
+       в отличие от маленького ромбика "продолжить", который легко путается
+       с другими мелкими яркими объектами на экране.
+    2. Если gate найден — смотрим, есть ли рядом иконка F (выбор варианта):
+       если да, жмём F; если нет, жмём Space (это безопасно в любой момент
+       монолога: если текст ещё печатается, игра просто домотает его мгновенно,
+       если уже дописан — сразу продолжит).
 
 Настройки берутся из config.json, который лежит рядом с exe/скриптом.
-Эталонные иконки берутся из папки templates/, которая тоже лежит рядом.
+Эталонные картинки берутся из папки templates/, которая тоже лежит рядом.
 
 Запуск игры должен быть в фокусе. Останов: Ctrl+C или закрыть окно консоли.
 """
@@ -43,20 +50,12 @@ KEY_HOLD_SECONDS = 0.05  # без явного удержания игра мо�
 
 DEFAULT_CONFIG = {
     "region": {"top": 520, "left": 880, "width": 460, "height": 580},
-    "match_threshold": 0.75,
+    "gate_threshold": 0.7,
+    "f_threshold": 0.75,
     "check_interval": 0.15,
     "key_cooldown": 0.4,
-    "templates": {
-        "space": {
-            "files": ["continue_icon.png"],
-            "key": "space",
-            # ромбик "продолжить" всегда ярко-оранжевый/жёлтый — совпадение по форме
-            # засчитывается только если цвет найденного участка тоже похож, это отсекает
-            # случайные фоновые объекты, похожие по силуэту, но другого цвета
-            "color_filter": {"hue_min": 8, "hue_max": 40, "min_saturation": 60, "min_value": 90},
-        },
-        "f": {"files": ["f_icon.png"], "key": "f"},
-    },
+    "gate_files": ["gate_bar.png", "gate_bar_2.png"],
+    "f_files": ["f_icon.png", "f_icon_2.png"],
 }
 
 
@@ -77,29 +76,21 @@ def load_config():
         return json.load(f)
 
 
-def load_templates(config):
+def load_template_group(config, key):
     templates_dir = os.path.join(base_dir(), "templates")
-    loaded = {}
-    for name, spec in config["templates"].items():
-        files = spec.get("files") or ([spec["file"]] if "file" in spec else [])
-        tpls = []
-        for file_name in files:
-            path = os.path.join(templates_dir, file_name)
-            tpl = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
-            if tpl is None:
-                raise FileNotFoundError(
-                    f"Не найден файл-эталон: {path}\n"
-                    f"Положи картинку иконки '{file_name}' в папку templates/ рядом с программой."
-                )
-            tpls.append(tpl)
-        if not tpls:
-            raise ValueError(f"У шаблона '{name}' в config.json не указано ни одного файла (files)")
-        loaded[name] = {
-            "templates": tpls,
-            "key": spec["key"],
-            "color_filter": spec.get("color_filter"),
-        }
-    return loaded
+    tpls = []
+    for file_name in config[key]:
+        path = os.path.join(templates_dir, file_name)
+        tpl = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+        if tpl is None:
+            raise FileNotFoundError(
+                f"Не найден файл-эталон: {path}\n"
+                f"Положи картинку '{file_name}' в папку templates/ рядом с программой."
+            )
+        tpls.append(tpl)
+    if not tpls:
+        raise ValueError(f"В config.json список '{key}' пуст — нужен хотя бы один файл")
+    return tpls
 
 
 def press_key(key):
@@ -111,42 +102,23 @@ def press_key(key):
 def grab_frame(sct, region):
     shot = sct.grab(region)
     frame_bgra = np.array(shot)
-    frame_bgr = frame_bgra[:, :, :3]
     frame_gray = cv2.cvtColor(frame_bgra, cv2.COLOR_BGRA2GRAY)
-    return frame_bgr, frame_gray
+    return frame_gray
 
 
-def find_best_match(frame_gray, templates):
-    best = {"name": None, "key": None, "score": 0.0, "loc": None, "shape": None}
-    for name, spec in templates.items():
-        for tpl in spec["templates"]:
-            if tpl.shape[0] > frame_gray.shape[0] or tpl.shape[1] > frame_gray.shape[1]:
-                continue
-            result = cv2.matchTemplate(frame_gray, tpl, cv2.TM_CCOEFF_NORMED)
-            _, max_val, _, max_loc = cv2.minMaxLoc(result)
-            if max_val > best["score"]:
-                best.update(name=name, key=spec["key"], score=max_val, loc=max_loc, shape=tpl.shape)
-    return best
+def best_match_score(frame_gray, tpls):
+    best_score = 0.0
+    for tpl in tpls:
+        if tpl.shape[0] > frame_gray.shape[0] or tpl.shape[1] > frame_gray.shape[1]:
+            continue
+        result = cv2.matchTemplate(frame_gray, tpl, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, _ = cv2.minMaxLoc(result)
+        if max_val > best_score:
+            best_score = max_val
+    return best_score
 
 
-def passes_color_filter(frame_bgr, loc, shape, color_filter):
-    if not color_filter:
-        return True
-    x, y = loc
-    h, w = shape
-    patch = frame_bgr[y : y + h, x : x + w]
-    if patch.size == 0:
-        return False
-    hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
-    mean_h, mean_s, mean_v = hsv.reshape(-1, 3).mean(axis=0)
-    return (
-        color_filter.get("hue_min", 0) <= mean_h <= color_filter.get("hue_max", 179)
-        and mean_s >= color_filter.get("min_saturation", 0)
-        and mean_v >= color_filter.get("min_value", 0)
-    )
-
-
-def render_dashboard(config, counters, last_event, log_lines, live_name, live_score):
+def render_dashboard(config, counters, last_event, log_lines, gate_score, f_score):
     region = config["region"]
 
     stats = Table.grid(padding=(0, 2))
@@ -158,10 +130,16 @@ def render_dashboard(config, counters, last_event, log_lines, live_name, live_sc
         f"top={region['top']} left={region['left']} "
         f"width={region['width']} height={region['height']}",
     )
-    stats.add_row("Порог совпадения:", str(config["match_threshold"]))
+    gate_ok = gate_score >= config["gate_threshold"]
+    gate_style = "green" if gate_ok else "grey50"
     stats.add_row(
-        "Текущий лучший score:",
-        f"{live_name or '-'}: {live_score:.2f}",
+        "Gate (диалог открыт):",
+        f"[{gate_style}]{gate_score:.2f}[/{gate_style}] (порог {config['gate_threshold']})",
+    )
+    f_style = "green" if f_score >= config["f_threshold"] else "grey50"
+    stats.add_row(
+        "Score иконки F:",
+        f"[{f_style}]{f_score:.2f}[/{f_style}] (порог {config['f_threshold']})",
     )
     stats.add_row("Нажатий SPACE:", str(counters.get("space", 0)))
     stats.add_row("Нажатий F:", str(counters.get("f", 0)))
@@ -185,9 +163,11 @@ def render_dashboard(config, counters, last_event, log_lines, live_name, live_sc
 def main():
     console = Console()
     config = load_config()
-    templates = load_templates(config)
+    gate_templates = load_template_group(config, "gate_files")
+    f_templates = load_template_group(config, "f_files")
     region = config["region"]
-    match_threshold = config["match_threshold"]
+    gate_threshold = config["gate_threshold"]
+    f_threshold = config["f_threshold"]
     check_interval = config["check_interval"]
     key_cooldown = config["key_cooldown"]
 
@@ -197,31 +177,34 @@ def main():
     last_press_time = 0.0
 
     with mss.mss() as sct, Live(
-        render_dashboard(config, counters, last_event, log_lines, None, 0.0),
+        render_dashboard(config, counters, last_event, log_lines, 0.0, 0.0),
         console=console,
         refresh_per_second=8,
         screen=True,
     ) as live:
         while True:
-            frame_bgr, frame_gray = grab_frame(sct, region)
-            match = find_best_match(frame_gray, templates)
-            name, key, score = match["name"], match["key"], match["score"]
+            frame_gray = grab_frame(sct, region)
+            gate_score = best_match_score(frame_gray, gate_templates)
 
-            if score >= match_threshold:
-                color_filter = templates[name]["color_filter"] if name else None
-                if not passes_color_filter(frame_bgr, match["loc"], match["shape"], color_filter):
-                    last_event = f"{name} (score={score:.2f}) отклонено — не тот цвет"
-                    log_lines.appendleft(f"[{time.strftime('%H:%M:%S')}] {last_event}")
-                else:
-                    now = time.time()
-                    if now - last_press_time >= key_cooldown:
-                        press_key(key)
+            f_score = 0.0
+            if gate_score >= gate_threshold:
+                f_score = best_match_score(frame_gray, f_templates)
+
+                now = time.time()
+                if now - last_press_time >= key_cooldown:
+                    if f_score >= f_threshold:
+                        press_key("f")
                         last_press_time = now
-                        counters[name] = counters.get(name, 0) + 1
-                        last_event = f"{name} (score={score:.2f}) -> press {key}"
-                        log_lines.appendleft(f"[{time.strftime('%H:%M:%S')}] {last_event}")
+                        counters["f"] += 1
+                        last_event = f"gate={gate_score:.2f} f={f_score:.2f} -> press f"
+                    else:
+                        press_key("space")
+                        last_press_time = now
+                        counters["space"] += 1
+                        last_event = f"gate={gate_score:.2f} f={f_score:.2f} -> press space"
+                    log_lines.appendleft(f"[{time.strftime('%H:%M:%S')}] {last_event}")
 
-            live.update(render_dashboard(config, counters, last_event, log_lines, name, score))
+            live.update(render_dashboard(config, counters, last_event, log_lines, gate_score, f_score))
             time.sleep(check_interval)
 
 
