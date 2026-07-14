@@ -1,15 +1,24 @@
 {
   "region": {
-    "top": 760,
+    "top": 520,
     "left": 880,
     "width": 460,
-    "height": 340
+    "height": 580
   },
   "match_threshold": 0.75,
   "check_interval": 0.15,
   "key_cooldown": 0.4,
   "templates": {
-    "space": { "file": "continue_icon.png", "key": "space" },
-    "f": { "file": "f_icon.png", "key": "f" }
+    "space": {
+      "files": [
+        "continue_icon.png",
+        "continue_icon_2.png",
+        "continue_icon_3.png",
+        "continue_icon_4.png",
+        "continue_icon_5.png"
+      ],
+      "key": "space"
+    },
+    "f": { "files": ["f_icon.png", "f_icon_2.png"], "key": "f" }
   }
 }

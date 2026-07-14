@@ -42,13 +42,13 @@ LOG_MAX_LINES = 8
 KEY_HOLD_SECONDS = 0.05  # без явного удержания игра может не считать нажатие
 
 DEFAULT_CONFIG = {
-    "region": {"top": 850, "left": 900, "width": 700, "height": 250},
-    "match_threshold": 0.82,
+    "region": {"top": 520, "left": 880, "width": 460, "height": 580},
+    "match_threshold": 0.75,
     "check_interval": 0.15,
     "key_cooldown": 0.4,
     "templates": {
-        "space": {"file": "continue_icon.png", "key": "space"},
-        "f": {"file": "f_icon.png", "key": "f"},
+        "space": {"files": ["continue_icon.png"], "key": "space"},
+        "f": {"files": ["f_icon.png"], "key": "f"},
     },
 }
 
@@ -74,14 +74,20 @@ def load_templates(config):
     templates_dir = os.path.join(base_dir(), "templates")
     loaded = {}
     for name, spec in config["templates"].items():
-        path = os.path.join(templates_dir, spec["file"])
-        tpl = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
-        if tpl is None:
-            raise FileNotFoundError(
-                f"Не найден файл-эталон: {path}\n"
-                f"Положи картинку иконки '{spec['file']}' в папку templates/ рядом с программой."
-            )
-        loaded[name] = (tpl, spec["key"])
+        files = spec.get("files") or ([spec["file"]] if "file" in spec else [])
+        tpls = []
+        for file_name in files:
+            path = os.path.join(templates_dir, file_name)
+            tpl = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+            if tpl is None:
+                raise FileNotFoundError(
+                    f"Не найден файл-эталон: {path}\n"
+                    f"Положи картинку иконки '{file_name}' в папку templates/ рядом с программой."
+                )
+            tpls.append(tpl)
+        if not tpls:
+            raise ValueError(f"У шаблона '{name}' в config.json не указано ни одного файла (files)")
+        loaded[name] = (tpls, spec["key"])
     return loaded
 
 
@@ -99,13 +105,14 @@ def grab_region(sct, region):
 
 def find_best_match(frame_gray, templates):
     best_name, best_key, best_score = None, None, 0.0
-    for name, (tpl, key) in templates.items():
-        if tpl.shape[0] > frame_gray.shape[0] or tpl.shape[1] > frame_gray.shape[1]:
-            continue
-        result = cv2.matchTemplate(frame_gray, tpl, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, _ = cv2.minMaxLoc(result)
-        if max_val > best_score:
-            best_name, best_key, best_score = name, key, max_val
+    for name, (tpls, key) in templates.items():
+        for tpl in tpls:
+            if tpl.shape[0] > frame_gray.shape[0] or tpl.shape[1] > frame_gray.shape[1]:
+                continue
+            result = cv2.matchTemplate(frame_gray, tpl, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, _ = cv2.minMaxLoc(result)
+            if max_val > best_score:
+                best_name, best_key, best_score = name, key, max_val
     return best_name, best_key, best_score
 
 
