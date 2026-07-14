@@ -17,7 +17,8 @@
         "continue_icon_4.png",
         "continue_icon_5.png"
       ],
-      "key": "space"
+      "key": "space",
+      "color_filter": { "hue_min": 8, "hue_max": 40, "min_saturation": 60, "min_value": 90 }
     },
     "f": { "files": ["f_icon.png", "f_icon_2.png"], "key": "f" }
   }

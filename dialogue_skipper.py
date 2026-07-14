@@ -47,7 +47,14 @@ DEFAULT_CONFIG = {
     "check_interval": 0.15,
     "key_cooldown": 0.4,
     "templates": {
-        "space": {"files": ["continue_icon.png"], "key": "space"},
+        "space": {
+            "files": ["continue_icon.png"],
+            "key": "space",
+            # ромбик "продолжить" всегда ярко-оранжевый/жёлтый — совпадение по форме
+            # засчитывается только если цвет найденного участка тоже похож, это отсекает
+            # случайные фоновые объекты, похожие по силуэту, но другого цвета
+            "color_filter": {"hue_min": 8, "hue_max": 40, "min_saturation": 60, "min_value": 90},
+        },
         "f": {"files": ["f_icon.png"], "key": "f"},
     },
 }
@@ -87,7 +94,11 @@ def load_templates(config):
             tpls.append(tpl)
         if not tpls:
             raise ValueError(f"У шаблона '{name}' в config.json не указано ни одного файла (files)")
-        loaded[name] = (tpls, spec["key"])
+        loaded[name] = {
+            "templates": tpls,
+            "key": spec["key"],
+            "color_filter": spec.get("color_filter"),
+        }
     return loaded
 
 
@@ -97,23 +108,42 @@ def press_key(key):
     pydirectinput.keyUp(key)
 
 
-def grab_region(sct, region):
+def grab_frame(sct, region):
     shot = sct.grab(region)
-    frame = np.array(shot)
-    return cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
+    frame_bgra = np.array(shot)
+    frame_bgr = frame_bgra[:, :, :3]
+    frame_gray = cv2.cvtColor(frame_bgra, cv2.COLOR_BGRA2GRAY)
+    return frame_bgr, frame_gray
 
 
 def find_best_match(frame_gray, templates):
-    best_name, best_key, best_score = None, None, 0.0
-    for name, (tpls, key) in templates.items():
-        for tpl in tpls:
+    best = {"name": None, "key": None, "score": 0.0, "loc": None, "shape": None}
+    for name, spec in templates.items():
+        for tpl in spec["templates"]:
             if tpl.shape[0] > frame_gray.shape[0] or tpl.shape[1] > frame_gray.shape[1]:
                 continue
             result = cv2.matchTemplate(frame_gray, tpl, cv2.TM_CCOEFF_NORMED)
-            _, max_val, _, _ = cv2.minMaxLoc(result)
-            if max_val > best_score:
-                best_name, best_key, best_score = name, key, max_val
-    return best_name, best_key, best_score
+            _, max_val, _, max_loc = cv2.minMaxLoc(result)
+            if max_val > best["score"]:
+                best.update(name=name, key=spec["key"], score=max_val, loc=max_loc, shape=tpl.shape)
+    return best
+
+
+def passes_color_filter(frame_bgr, loc, shape, color_filter):
+    if not color_filter:
+        return True
+    x, y = loc
+    h, w = shape
+    patch = frame_bgr[y : y + h, x : x + w]
+    if patch.size == 0:
+        return False
+    hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
+    mean_h, mean_s, mean_v = hsv.reshape(-1, 3).mean(axis=0)
+    return (
+        color_filter.get("hue_min", 0) <= mean_h <= color_filter.get("hue_max", 179)
+        and mean_s >= color_filter.get("min_saturation", 0)
+        and mean_v >= color_filter.get("min_value", 0)
+    )
 
 
 def render_dashboard(config, counters, last_event, log_lines, live_name, live_score):
@@ -173,17 +203,23 @@ def main():
         screen=True,
     ) as live:
         while True:
-            frame_gray = grab_region(sct, region)
-            name, key, score = find_best_match(frame_gray, templates)
+            frame_bgr, frame_gray = grab_frame(sct, region)
+            match = find_best_match(frame_gray, templates)
+            name, key, score = match["name"], match["key"], match["score"]
 
             if score >= match_threshold:
-                now = time.time()
-                if now - last_press_time >= key_cooldown:
-                    press_key(key)
-                    last_press_time = now
-                    counters[name] = counters.get(name, 0) + 1
-                    last_event = f"{name} (score={score:.2f}) -> press {key}"
+                color_filter = templates[name]["color_filter"] if name else None
+                if not passes_color_filter(frame_bgr, match["loc"], match["shape"], color_filter):
+                    last_event = f"{name} (score={score:.2f}) отклонено — не тот цвет"
                     log_lines.appendleft(f"[{time.strftime('%H:%M:%S')}] {last_event}")
+                else:
+                    now = time.time()
+                    if now - last_press_time >= key_cooldown:
+                        press_key(key)
+                        last_press_time = now
+                        counters[name] = counters.get(name, 0) + 1
+                        last_event = f"{name} (score={score:.2f}) -> press {key}"
+                        log_lines.appendleft(f"[{time.strftime('%H:%M:%S')}] {last_event}")
 
             live.update(render_dashboard(config, counters, last_event, log_lines, name, score))
             time.sleep(check_interval)
