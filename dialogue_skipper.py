@@ -39,6 +39,7 @@ except Exception:
     pass
 
 LOG_MAX_LINES = 8
+KEY_HOLD_SECONDS = 0.05  # без явного удержания игра может не считать нажатие
 
 DEFAULT_CONFIG = {
     "region": {"top": 850, "left": 900, "width": 700, "height": 250},
@@ -82,6 +83,12 @@ def load_templates(config):
             )
         loaded[name] = (tpl, spec["key"])
     return loaded
+
+
+def press_key(key):
+    pydirectinput.keyDown(key)
+    time.sleep(KEY_HOLD_SECONDS)
+    pydirectinput.keyUp(key)
 
 
 def grab_region(sct, region):
@@ -165,7 +172,7 @@ def main():
             if score >= match_threshold:
                 now = time.time()
                 if now - last_press_time >= key_cooldown:
-                    pydirectinput.press(key)
+                    press_key(key)
                     last_press_time = now
                     counters[name] = counters.get(name, 0) + 1
                     last_event = f"{name} (score={score:.2f}) -> press {key}"
