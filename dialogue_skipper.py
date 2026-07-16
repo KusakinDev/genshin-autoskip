@@ -30,12 +30,38 @@ import cv2
 import numpy as np
 import mss
 import pydirectinput
+import keyboard
 from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
 
 pydirectinput.PAUSE = 0  # не тормозить между вызовами pydirectinput
+
+
+def ensure_admin():
+    # Симулированные нажатия клавиш не доходят до игры, если та запущена от
+    # администратора, а этот процесс — нет (Windows блокирует ввод в окна с
+    # более высокими правами). Проще всегда самим запрашивать повышение,
+    # чем каждый раз объяснять пользователю нажать "Запуск от имени администратора".
+    try:
+        is_admin = ctypes.windll.shell32.IsUserAnAdmin()
+    except Exception:
+        return  # не Windows или API недоступен — продолжаем как есть
+    if is_admin:
+        return
+    if getattr(sys, "frozen", False):
+        exe = sys.executable
+        args = sys.argv[1:]
+    else:
+        exe = sys.executable
+        args = [os.path.abspath(__file__)] + sys.argv[1:]
+    params = " ".join(f'"{a}"' for a in args)
+    ret = ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, params, None, 1)
+    if ret > 32:
+        sys.exit(0)
+    print("Не удалось запросить права администратора — продолжаю без них.")
+
 
 try:
     # Без этого при масштабировании экрана (125%/150%) и/или запуске от администратора
@@ -56,6 +82,7 @@ DEFAULT_CONFIG = {
     "key_cooldown": 0.4,
     "gate_files": ["gate_bar.png", "gate_bar_2.png"],
     "f_files": ["f_icon.png", "f_icon_2.png"],
+    "toggle_hotkey": "f9",
 }
 
 
@@ -126,13 +153,18 @@ def best_match_score(frame_gray, tpls):
     return best_score
 
 
-def render_dashboard(config, counters, last_event, log_lines, gate_score, f_score):
+def render_dashboard(config, counters, last_event, log_lines, gate_score, f_score, enabled):
     region = config["region"]
 
     stats = Table.grid(padding=(0, 2))
     stats.add_column(justify="right", style="bold")
     stats.add_column()
-    stats.add_row("Статус:", "[bold green]работает[/bold green]")
+    status_text = "[bold green]работает[/bold green]" if enabled else "[bold yellow]на паузе[/bold yellow]"
+    stats.add_row("Статус:", status_text)
+    stats.add_row(
+        "Хоткей вкл/выкл:",
+        f"[bold]{config['toggle_hotkey'].upper()}[/bold]",
+    )
     stats.add_row(
         "Область экрана:",
         f"top={region['top']} left={region['left']} "
@@ -163,7 +195,7 @@ def render_dashboard(config, counters, last_event, log_lines, gate_score, f_scor
     return Panel(
         body,
         title="Genshin Autoskip — [bold]запущен[/bold]",
-        subtitle="Ctrl+C или закрытие окна — остановить",
+        subtitle=f"{config['toggle_hotkey'].upper()} — пауза/продолжить  |  Ctrl+C или закрытие окна — остановить",
         border_style="cyan",
     )
 
@@ -183,14 +215,30 @@ def main():
     last_event = None
     log_lines = deque(maxlen=LOG_MAX_LINES)
     last_press_time = 0.0
+    state = {"enabled": True}
+
+    def toggle_enabled():
+        state["enabled"] = not state["enabled"]
+        status = "включён" if state["enabled"] else "на паузе"
+        log_lines.appendleft(f"[{time.strftime('%H:%M:%S')}] {config['toggle_hotkey'].upper()} -> {status}")
+
+    try:
+        keyboard.add_hotkey(config["toggle_hotkey"], toggle_enabled)
+    except Exception as exc:
+        log_lines.appendleft(f"Не удалось назначить хоткей {config['toggle_hotkey']}: {exc}")
 
     with mss.mss() as sct, Live(
-        render_dashboard(config, counters, last_event, log_lines, 0.0, 0.0),
+        render_dashboard(config, counters, last_event, log_lines, 0.0, 0.0, state["enabled"]),
         console=console,
         refresh_per_second=8,
         screen=True,
     ) as live:
         while True:
+            if not state["enabled"]:
+                live.update(render_dashboard(config, counters, last_event, log_lines, 0.0, 0.0, False))
+                time.sleep(check_interval)
+                continue
+
             frame_gray = grab_frame(sct, region)
             frame_edges = to_edges(frame_gray)
             gate_score = best_match_score(frame_edges, gate_templates)
@@ -213,12 +261,13 @@ def main():
                         last_event = f"gate={gate_score:.2f} f={f_score:.2f} -> press space"
                     log_lines.appendleft(f"[{time.strftime('%H:%M:%S')}] {last_event}")
 
-            live.update(render_dashboard(config, counters, last_event, log_lines, gate_score, f_score))
+            live.update(render_dashboard(config, counters, last_event, log_lines, gate_score, f_score, True))
             time.sleep(check_interval)
 
 
 if __name__ == "__main__":
     try:
+        ensure_admin()
         main()
     except KeyboardInterrupt:
         print("\nОстановлено.")
