@@ -200,14 +200,6 @@ def load_config():
         return json.load(f)
 
 
-def to_edges(gray_img):
-    # Сравнение по контурам вместо сырой яркости — форма линии/буквы не меняется
-    # от того, что происходит на заднем фоне (разные локации, освещение, цвета),
-    # а именно фон и был причиной нестабильных совпадений.
-    blurred = cv2.GaussianBlur(gray_img, (3, 3), 0)
-    return cv2.Canny(blurred, 50, 150)
-
-
 def load_template_group(config, key):
     templates_dir = os.path.join(base_dir(), "templates")
     tpls = []
@@ -219,7 +211,7 @@ def load_template_group(config, key):
                 f"Не найден файл-эталон: {path}\n"
                 f"Положи картинку '{file_name}' в папку templates/ рядом с программой."
             )
-        tpls.append(to_edges(tpl))
+        tpls.append(tpl)
     if not tpls:
         raise ValueError(f"В config.json список '{key}' пуст — нужен хотя бы один файл")
     return tpls
@@ -338,12 +330,11 @@ def main():
                 continue
 
             frame_gray = grab_frame(sct, region)
-            frame_edges = to_edges(frame_gray)
-            gate_score = best_match_score(frame_edges, gate_templates)
+            gate_score = best_match_score(frame_gray, gate_templates)
 
             f_score = 0.0
             if gate_score >= gate_threshold:
-                f_score = best_match_score(frame_edges, f_templates)
+                f_score = best_match_score(frame_gray, f_templates)
 
                 now = time.time()
                 if now - last_press_time >= key_cooldown:
