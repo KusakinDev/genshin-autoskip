@@ -22,8 +22,12 @@
 import ctypes
 import json
 import os
+import subprocess
 import sys
+import tempfile
 import time
+import urllib.request
+import zipfile
 from collections import deque
 
 import cv2
@@ -37,6 +41,14 @@ from rich.panel import Panel
 from rich.table import Table
 
 pydirectinput.PAUSE = 0  # не тормозить между вызовами pydirectinput
+
+# Поднимай перед каждым тегированием нового релиза в GitHub — иначе
+# автообновление не увидит новую версию.
+VERSION = "1.0.0"
+GITHUB_REPO = "KusakinDev/genshin-autoskip"
+RELEASES_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+UPDATE_ASSET_NAME = "GenshinAutoSkip.zip"
+UPDATE_EXE_NAMES = ["DialogueSkipper.exe", "CaptureScreenshot.exe"]
 
 
 def ensure_admin():
@@ -90,6 +102,91 @@ def base_dir():
     if getattr(sys, "frozen", False):
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
+
+
+def parse_version(v):
+    v = v.strip().lstrip("vV")
+    parts = []
+    for p in v.split("."):
+        digits = "".join(ch for ch in p if ch.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts) or (0,)
+
+
+def check_for_update():
+    """Возвращает (tag, ссылка_на_zip) если на GitHub есть версия новее текущей, иначе None."""
+    try:
+        req = urllib.request.Request(
+            RELEASES_API_URL,
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "GenshinAutoSkip"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        latest_tag = data.get("tag_name", "")
+        if not latest_tag or parse_version(latest_tag) <= parse_version(VERSION):
+            return None
+        for asset in data.get("assets", []):
+            if asset.get("name") == UPDATE_ASSET_NAME:
+                return latest_tag, asset.get("browser_download_url")
+        return None
+    except Exception:
+        return None  # нет интернета / GitHub недоступен / что угодно ещё — просто не обновляемся
+
+
+def download_and_apply_update(asset_url):
+    """Скачивает zip с релиза, кладёт новые exe поверх старых и перезапускает программу.
+    config.json и templates/ не трогает — это калибровка пользователя."""
+    if not getattr(sys, "frozen", False):
+        print("Автообновление работает только для собранного .exe, не для запуска из исходников.")
+        return False
+
+    print("Скачиваю обновление...")
+    tmp_dir = tempfile.mkdtemp(prefix="genshin_autoskip_update_")
+    zip_path = os.path.join(tmp_dir, "update.zip")
+    urllib.request.urlretrieve(asset_url, zip_path)
+
+    extract_dir = os.path.join(tmp_dir, "extracted")
+    with zipfile.ZipFile(zip_path) as zf:
+        zf.extractall(extract_dir)
+
+    target_dir = base_dir()
+    copy_lines = "\n".join(
+        f'copy /y "{os.path.join(extract_dir, name)}" "{os.path.join(target_dir, name)}"'
+        for name in UPDATE_EXE_NAMES
+        if os.path.exists(os.path.join(extract_dir, name))
+    )
+    if not copy_lines:
+        print("В скачанном архиве не нашлось exe-файлов — обновление отменено.")
+        return False
+
+    bat_path = os.path.join(tmp_dir, "apply_update.bat")
+    bat_content = (
+        "@echo off\r\n"
+        "timeout /t 2 /nobreak > nul\r\n"
+        f"{copy_lines}\r\n"
+        f'start "" "{os.path.join(target_dir, "DialogueSkipper.exe")}"\r\n'
+        'del "%~f0"\r\n'
+    )
+    with open(bat_path, "w", encoding="utf-8") as f:
+        f.write(bat_content)
+
+    subprocess.Popen(["cmd", "/c", bat_path], creationflags=subprocess.CREATE_NO_WINDOW)
+    return True
+
+
+def offer_update():
+    update = check_for_update()
+    if not update:
+        return
+    latest_tag, asset_url = update
+    if not asset_url:
+        return
+    print(f"Доступно обновление: {latest_tag} (у тебя {VERSION})")
+    answer = input("Скачать и установить сейчас? [y/N]: ").strip().lower()
+    if answer in ("y", "yes", "д", "да"):
+        if download_and_apply_update(asset_url):
+            print("Обновление скачано — программа сейчас перезапустится...")
+            sys.exit(0)
 
 
 def load_config():
@@ -161,6 +258,7 @@ def render_dashboard(config, counters, last_event, log_lines, gate_score, f_scor
     stats.add_column()
     status_text = "[bold green]работает[/bold green]" if enabled else "[bold yellow]на паузе[/bold yellow]"
     stats.add_row("Статус:", status_text)
+    stats.add_row("Версия:", VERSION)
     stats.add_row(
         "Хоткей вкл/выкл:",
         f"[bold]{config['toggle_hotkey'].upper()}[/bold]",
@@ -268,6 +366,7 @@ def main():
 if __name__ == "__main__":
     try:
         ensure_admin()
+        offer_update()
         main()
     except KeyboardInterrupt:
         print("\nОстановлено.")

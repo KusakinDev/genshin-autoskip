@@ -22,6 +22,13 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Set VERSION from release tag
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.release.tag_name }}" -replace '^v', ''
+          (Get-Content dialogue_skipper.py) -replace 'VERSION = "[^"]*"', "VERSION = `"$tag`"" | Set-Content dialogue_skipper.py
+          Select-String -Path dialogue_skipper.py -Pattern '^VERSION = '
+
       - name: Build DialogueSkipper.exe
         run: pyinstaller --onefile --console --name DialogueSkipper dialogue_skipper.py
 
