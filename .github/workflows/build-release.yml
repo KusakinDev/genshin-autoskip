@@ -42,6 +42,7 @@ jobs:
           Copy-Item dist/DialogueSkipper.exe release_package/
           Copy-Item dist/CaptureScreenshot.exe release_package/
           Copy-Item config.json release_package/
+          Copy-Item detection.json release_package/
           Copy-Item README.md release_package/
           Copy-Item templates release_package/templates -Recurse
           Compress-Archive -Path release_package/* -DestinationPath GenshinAutoSkip.zip

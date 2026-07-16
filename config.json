@@ -7,9 +7,5 @@
   },
   "gate_threshold": 0.7,
   "f_threshold": 0.75,
-  "check_interval": 0.15,
-  "key_cooldown": 0.4,
-  "gate_files": ["gate_bar.png", "gate_bar_2.png", "gate_bar_3.png"],
-  "f_files": ["f_icon.png", "f_icon_2.png"],
   "toggle_hotkey": "f9"
 }

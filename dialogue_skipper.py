@@ -86,15 +86,24 @@ except Exception:
 LOG_MAX_LINES = 8
 KEY_HOLD_SECONDS = 0.05  # без явного удержания игра может не считать нажатие
 
+# config.json — личная калибровка пользователя (свой монитор/резолюция/чувствительность).
+# Автообновление этот файл никогда не трогает.
 DEFAULT_CONFIG = {
     "region": {"top": 520, "left": 880, "width": 460, "height": 580},
     "gate_threshold": 0.7,
     "f_threshold": 0.75,
+    "toggle_hotkey": "f9",
+}
+
+# detection.json — то, что относится к самим эталонам распознавания. Обновляется
+# автообновлением вместе с папкой templates/, так что новые/улучшенные шаблоны
+# доходят до пользователей без ручного скачивания zip заново.
+DETECTION_CONFIG_FILENAME = "detection.json"
+DEFAULT_DETECTION_CONFIG = {
     "check_interval": 0.15,
     "key_cooldown": 0.4,
-    "gate_files": ["gate_bar.png", "gate_bar_2.png"],
+    "gate_files": ["gate_bar.png", "gate_bar_2.png", "gate_bar_3.png"],
     "f_files": ["f_icon.png", "f_icon_2.png"],
-    "toggle_hotkey": "f9",
 }
 
 
@@ -134,8 +143,9 @@ def check_for_update():
 
 
 def download_and_apply_update(asset_url):
-    """Скачивает zip с релиза, кладёт новые exe поверх старых и перезапускает программу.
-    config.json и templates/ не трогает — это калибровка пользователя."""
+    """Скачивает zip с релиза и обновляет: exe-файлы, detection.json и папку
+    templates/ (эталоны распознавания). config.json (личная калибровка —
+    region/пороги/хоткей) не трогает никогда."""
     if not getattr(sys, "frozen", False):
         print("Автообновление работает только для собранного .exe, не для запуска из исходников.")
         return False
@@ -150,20 +160,29 @@ def download_and_apply_update(asset_url):
         zf.extractall(extract_dir)
 
     target_dir = base_dir()
+    file_names = UPDATE_EXE_NAMES + [DETECTION_CONFIG_FILENAME]
     copy_lines = "\n".join(
         f'copy /y "{os.path.join(extract_dir, name)}" "{os.path.join(target_dir, name)}"'
-        for name in UPDATE_EXE_NAMES
+        for name in file_names
         if os.path.exists(os.path.join(extract_dir, name))
     )
     if not copy_lines:
-        print("В скачанном архиве не нашлось exe-файлов — обновление отменено.")
+        print("В скачанном архиве не нашлось файлов для обновления — обновление отменено.")
         return False
+
+    templates_src = os.path.join(extract_dir, "templates")
+    templates_line = ""
+    if os.path.isdir(templates_src):
+        templates_line = (
+            f'xcopy /y /e /i "{templates_src}" "{os.path.join(target_dir, "templates")}" > nul\r\n'
+        )
 
     bat_path = os.path.join(tmp_dir, "apply_update.bat")
     bat_content = (
         "@echo off\r\n"
         "timeout /t 2 /nobreak > nul\r\n"
         f"{copy_lines}\r\n"
+        f"{templates_line}"
         f'start "" "{os.path.join(target_dir, "DialogueSkipper.exe")}"\r\n'
         'del "%~f0"\r\n'
     )
@@ -189,15 +208,24 @@ def offer_update():
             sys.exit(0)
 
 
-def load_config():
-    config_path = os.path.join(base_dir(), "config.json")
-    if not os.path.exists(config_path):
-        print(f"config.json не найден, создаю с настройками по умолчанию: {config_path}")
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(DEFAULT_CONFIG, f, ensure_ascii=False, indent=2)
-        return DEFAULT_CONFIG
-    with open(config_path, "r", encoding="utf-8") as f:
+def load_json_config(filename, default):
+    path = os.path.join(base_dir(), filename)
+    if not os.path.exists(path):
+        print(f"{filename} не найден, создаю с настройками по умолчанию: {path}")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(default, f, ensure_ascii=False, indent=2)
+        return dict(default)
+    with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def load_config():
+    # Личная калибровка и шаблоны/тайминги лежат в двух разных файлах, но
+    # остальному коду удобнее работать с одним объединённым словарём.
+    config = load_json_config("config.json", DEFAULT_CONFIG)
+    detection = load_json_config(DETECTION_CONFIG_FILENAME, DEFAULT_DETECTION_CONFIG)
+    config.update(detection)
+    return config
 
 
 def load_template_group(config, key):
